@@ -78,6 +78,14 @@ in `rankings_cache.json`.
 4. Collect the venues of included papers in `venues.txt` and run `batch_venue_verifier.py`
    to assess their quality.
 
+## Tests
+
+```sh
+python -m unittest discover -s tests -t .
+```
+
+Network and Scopus calls are mocked; no API key or internet access is needed.
+
 ## License
 
 See [LICENSE](LICENSE).
