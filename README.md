@@ -8,7 +8,7 @@ review (Scopus CSV exports in, CSV/Markdown out).
 |--------|-------------|---------|
 | `check_wanted_papers.py` | Search validation | Check that known/expected papers are present in your search results |
 | `cross_references_finder.py` | Snowballing | Find papers cited by several screened papers, enriched with DOI, venue and abstract |
-| `batch_venue_verifier.py` | Eligibility / quality | Look up SCImago quartiles and CORE ranks for journals and conferences |
+| `batch_venue_verifier.py` | Eligibility / quality | Look up [SCImago](https://www.scimagojr.com/) quartiles and [CORE](https://portal.core.edu.au/conf-ranks/) ranks for journals and conferences |
 
 ## Installation
 
@@ -17,7 +17,8 @@ pip install -r requirements.txt
 ```
 
 `cross_references_finder.py` enrichment uses [pybliometrics](https://pybliometrics.readthedocs.io/),
-which needs a Scopus API key (you are prompted for it on first use and it is stored in
+which needs a [Scopus API key](https://www.scopus.com/pages/home)
+(you are prompted for it on first use and it is stored in
 `~/.config/pybliometrics.cfg`). Use `--no-enrich` to work without one.
 
 ## Usage
