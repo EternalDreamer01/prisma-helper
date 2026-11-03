@@ -1,1 +1,82 @@
-# 
+# PRISMA Helper
+
+Small command-line scripts that help researchers with the screening and
+identification steps of a [PRISMA](https://www.prisma-statement.org/) systematic
+review (Scopus CSV exports in, CSV/Markdown out).
+
+| Script | PRISMA step | Purpose |
+|--------|-------------|---------|
+| `check_wanted_papers.py` | Search validation | Check that known/expected papers are present in your search results |
+| `cross_references_finder.py` | Snowballing | Find papers cited by several screened papers, enriched with DOI, venue and abstract |
+| `batch_venue_verifier.py` | Eligibility / quality | Look up SCImago quartiles and CORE ranks for journals and conferences |
+
+## Installation
+
+```sh
+pip install -r requirements.txt
+```
+
+`cross_references_finder.py` enrichment uses [pybliometrics](https://pybliometrics.readthedocs.io/),
+which needs a Scopus API key (you are prompted for it on first use and it is stored in
+`~/.config/pybliometrics.cfg`). Use `--no-enrich` to work without one.
+
+## Usage
+
+### 1. Validate your search: `check_wanted_papers.py`
+
+Given the Scopus export and a list of papers you know should be found, print the ones
+that are missing (a hint that the search string needs improvement).
+
+```sh
+python check_wanted_papers.py scopus_export.csv expected_papers.csv > missing.csv
+```
+
+Both CSVs need a `Title` column; a column containing `DOI` is also used. Matching is by
+DOI, then exact normalized title, then fuzzy title (Levenshtein similarity ≥ 0.98).
+The number of missing papers is printed on stderr; the missing rows (Year, Title,
+Authors, DOI) on stdout.
+
+### 2. Snowballing: `cross_references_finder.py`
+
+Reads `screen.csv` (a Scopus export with `Title` and `References` columns) and lists
+references cited by at least two of the screened papers, which are good candidates
+for inclusion.
+
+```sh
+python cross_references_finder.py [-x] [-t 0.9] [--no-enrich] > candidates.tsv
+```
+
+| Option | Description |
+|--------|-------------|
+| `-x`, `--exclude-present` | Skip references that are already papers in the CSV |
+| `-t`, `--threshold` | Minimum title similarity to treat references as the same paper (default 0.9) |
+| `--no-enrich` | Skip the Scopus lookup |
+
+Output is tab-separated: `Citing papers`, `Reference`, `DOI`, `Publication venue`,
+`Abstract`. The last three are looked up in Scopus by title and left empty when no
+match is found. Enrichment makes one or two API requests per reference, so it can be
+slow and consume quota.
+
+### 3. Check venue quality: `batch_venue_verifier.py`
+
+Put one journal or conference name per line in `venues.txt`, then run:
+
+```sh
+python batch_venue_verifier.py
+```
+
+Journals are searched on SCImago first, other venues on CORE first, with the other
+source as fallback. Results are written to `rankings_results.md` and cached for 30 days
+in `rankings_cache.json`.
+
+## Suggested workflow
+
+1. Export search results from Scopus; run `check_wanted_papers.py` to validate coverage.
+2. Screen titles/abstracts and save the included papers as `screen.csv`.
+3. Run `cross_references_finder.py` to find additional candidates via snowballing.
+4. Collect the venues of included papers in `venues.txt` and run `batch_venue_verifier.py`
+   to assess their quality.
+
+## License
+
+See [LICENSE](LICENSE).
