@@ -126,23 +126,35 @@ def main():
 	if not saved_title or not existing_title:
 		sys.exit("Error: Both CSV files must contain a Title column.")
 
-	# Extract existing titles and DOIs
-	existing_titles = {
-		normalize_text(row[existing_title])
-		for row in existing_rows
-		if row.get(existing_title, "").strip()
-	}
+	# Index existing rows by normalized title and DOI
+	existing_by_title = {}
+	existing_by_doi = {}
+	for row in existing_rows:
+		t = normalize_text(row.get(existing_title, ""))
+		if t:
+			existing_by_title.setdefault(t, row)
+		if existing_doi:
+			d = normalize_doi(row.get(existing_doi, ""))
+			if d:
+				existing_by_doi.setdefault(d, row)
 
-	existing_dois = {
-		normalize_doi(row[existing_doi])
-		for row in existing_rows
-		if existing_doi and row.get(existing_doi, "").strip()
-	}
-
-	# Prepare titles for fuzzy matching
-	existing_titles_list = list(existing_titles)
+	existing_titles_list = list(existing_by_title)
+	references_col = find_column(existing_headers, "References")
+	year_col = find_column(existing_headers, "Year")
+	source_col = find_column(existing_headers, "Source title")
 
 	missing_rows = []
+	matching_rows = []
+
+	def record_match(saved_row, existing_row):
+		matching_rows.append({
+			"Year": existing_row.get(year_col, "") if year_col else "",
+			"Title": saved_row.get(saved_title, ""),
+			# "Matched Title": existing_row.get(existing_title, ""),
+			"Source title": existing_row.get(source_col, "") if source_col else "",
+			"DOI": existing_row.get(existing_doi, "") if existing_doi else "",
+			"References": existing_row.get(references_col, "") if references_col else "",
+		})
 
 	from rich.progress import track
 	for row in track(saved_rows, description="Checking papers..."):
@@ -153,21 +165,36 @@ def main():
 		)
 
 		# DOI match takes priority
-		if doi and doi in existing_dois:
+		if doi and doi in existing_by_doi:
+			record_match(row, existing_by_doi[doi])
 			continue
 
 		# Exact normalized title match
-		if title and title in existing_titles:
+		if title and title in existing_by_title:
+			record_match(row, existing_by_title[title])
 			continue
 
 		# Fuzzy title matching
-		if title and any(
-			similarity(title, existing) >= THRESHOLD
-			for existing in existing_titles_list
-		):
-			continue
+		if title:
+			best = max(
+				existing_titles_list,
+				key=lambda e: similarity(title, e),
+				default=None
+			)
+			if best is not None and similarity(title, best) >= THRESHOLD:
+				record_match(row, existing_by_title[best])
+				continue
 
 		missing_rows.append(row)
+
+	with open("matched.csv", "w", encoding="utf-8", newline="") as f:
+		writer = csv.DictWriter(
+			f,
+			fieldnames=["Year", "Title", "Source title", "DOI", "References"],
+			lineterminator="\n"
+		)
+		writer.writeheader()
+		writer.writerows(matching_rows)
 
 	# Print results
 	print(f"Missing papers: {len(missing_rows)}", file=sys.stderr)
@@ -177,6 +204,16 @@ def main():
 	# 	if h.strip().casefold() in ("year", "title", "publication venue", "source title", "doi", "link")
 	# 	or "doi" in h.casefold()
 	# ]
+
+	# writer = csv.DictWriter(
+	# 	sys.stdout,
+	# 	fieldnames=output_headers,
+	# 	lineterminator="\n",
+	# 	extrasaction="ignore"
+	# )
+
+	# writer.writeheader()
+	# writer.writerows(missing_rows)
 
 	if missing_rows:
 		from rich.table import Table

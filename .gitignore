@@ -224,9 +224,11 @@ __marimo__/
 
 .vscode/
 
-rankings_cache.*
+*_cache.json
 rankings_results.*
 
 venues.txt
 saved.*
 papers.*
+matched.csv
+snowball.csv

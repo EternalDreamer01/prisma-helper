@@ -10,6 +10,8 @@ review (Scopus CSV exports in, CSV/Markdown out).
 | `cross_references_finder.py` | Snowballing | Find papers cited by several screened papers, enriched with DOI, venue and abstract |
 | `batch_venue_verifier.py` | Eligibility / quality | Look up [SCImago](https://www.scimagojr.com/) quartiles and [CORE](https://portal.core.edu.au/conf-ranks/) ranks for journals and conferences |
 
+
+
 ## Installation
 
 ```sh
@@ -44,8 +46,12 @@ references cited by at least two of the screened papers, which are good candidat
 for inclusion.
 
 ```sh
-python cross_references_finder.py [-x] [-t 0.9] [--no-enrich] > candidates.tsv
+python cross_references_finder.py [-x] [-t 0.9] [--no-enrich]
 ```
+
+Progress is shown with rich, the results are printed as a table and saved to
+`snowball.csv`. Scopus lookups are cached in `snowball_cache.json`, so reruns only
+query new references.
 
 | Option | Description |
 |--------|-------------|
