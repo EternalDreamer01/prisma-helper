@@ -124,7 +124,7 @@ def print_rich_table(results):
 			str(item.get("SJR", "N/A")),
 			str(item.get("Quartile / Rank", "N/A")),
 			str(item.get("H-index", "N/A"))
-		)
+		, style="on red" if (item.get("Quartile / Rank") not in ["Q1", "A*", "A"]) else "")
 
 	console.print(table)
 

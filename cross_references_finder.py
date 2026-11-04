@@ -19,12 +19,13 @@ import argparse, csv, re, sys
 from rapidfuzz.distance import Levenshtein
 
 _scopus_ready = False
+THRESHOLD = 0.95
 
 def normalize_doi(doi):
     doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", str(doi or "").strip())
     return doi or None
 
-def enrich(ref, threshold=0.9):
+def enrich(ref, threshold=THRESHOLD):
     """Look the reference up in Scopus; return [doi, publication venue, abstract] (empty if unknown)."""
     global _scopus_ready
     from pybliometrics.scopus import AbstractRetrieval, ScopusSearch
@@ -69,7 +70,7 @@ def parse(ref):
 def same_paper(a, b, threshold):
     return a[0] == b[0] and Levenshtein.normalized_similarity(a[1], b[1]) >= threshold
 
-def find_cross_references(file_path, min_papers=2, exclude_present=False, threshold=0.9):
+def find_cross_references(file_path, min_papers=2, exclude_present=False, threshold=THRESHOLD):
     with open(file_path, 'r', encoding='utf-8-sig') as file:
         rows = list(csv.DictReader(file))
     present = [clean(r["Title"]) for r in rows] if exclude_present else []
@@ -93,8 +94,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("-x", "--exclude-present", action="store_true",
                         help="skip references that are themselves papers listed in the CSV")
-    parser.add_argument("-t", "--threshold", type=float, default=0.9,
-                        help="minimum normalized Levenshtein similarity of titles (default 0.9)")
+    parser.add_argument("-t", "--threshold", type=float, default=THRESHOLD,
+                        help="minimum normalized Levenshtein similarity of titles (default {THRESHOLD})".format(THRESHOLD=THRESHOLD))
     parser.add_argument("--no-enrich", action="store_true",
                         help="skip the Scopus lookup of DOI, publication venue and abstract")
     args = parser.parse_args()

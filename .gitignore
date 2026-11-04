@@ -222,7 +222,11 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+.vscode/
+
 rankings_cache.*
 rankings_results.*
 
 venues.txt
+saved.*
+papers.*
