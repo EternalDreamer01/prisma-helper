@@ -102,6 +102,16 @@ def print_rich_table(results):
 		console.print("[yellow]No results found.[/yellow]")
 		return
 
+	def row_colour(item) -> str:
+		quartile = item.get("Quartile / Rank", "").upper()
+		if quartile in ["Q1", "A*", "A"]:
+			return "" # "on green"
+		elif quartile in ["Q2", "B"]:
+			return "on yellow"
+		elif quartile in ["Q3", "C"]:
+			return "on dark_orange3"
+		return "on red"
+
 	table = Table(
 		title="Journal and Conference Rankings",
 		box=box.ROUNDED,
@@ -124,7 +134,7 @@ def print_rich_table(results):
 			str(item.get("SJR", "N/A")),
 			str(item.get("Quartile / Rank", "N/A")),
 			str(item.get("H-index", "N/A"))
-		, style="on red" if (item.get("Quartile / Rank") not in ["Q1", "A*", "A"]) else "")
+		, style=row_colour(item))
 
 	console.print(table)
 
