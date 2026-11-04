@@ -198,6 +198,12 @@ def get_cached_result(name, cache):
 			)
 			return None
 
+		if not cached_result_is_valid(entry["result"]):
+			console.print(
+				f"[yellow]Cache entry rejected by current matching rules:[/yellow] {name}"
+			)
+			return None
+
 		console.print(
 			f"[green]CACHE HIT:[/green] {name}"
 		)
@@ -334,6 +340,67 @@ def extract_scimago_categories(soup):
 	)
 
 
+CORE_MIN_SCORE = 80
+SCIMAGO_MIN_SIMILARITY = 0.8
+
+def venue_similarity(query, title):
+	"""Similarity (0-1) between a venue name and a candidate title, ignoring case/punctuation."""
+	import difflib
+	return difflib.SequenceMatcher(None, normalise(query), normalise(title)).ratio()
+
+CORE_STOP_WORDS = {
+	"the", "of", "and", "on", "for", "in",
+	"a", "an", "proceedings", "conference"
+}
+
+def core_match_score(query, title, acronym=""):
+	"""Score (0-100) of how well a CORE entry matches the query."""
+	query_norm = normalise(query)
+	title_norm = normalise(title)
+
+	if query_norm == title_norm:
+		return 100
+
+	query_words = set(query_norm.split()) - CORE_STOP_WORDS
+	title_words = set(title_norm.split()) - CORE_STOP_WORDS
+
+	if not query_words or not title_words:
+		return 0
+
+	common = query_words & title_words
+	recall = len(common) / len(query_words)
+	precision = len(common) / len(title_words)
+
+	if not common:
+		return 0
+
+	# F1 penalises extra words ("IEEE Access" != "IEEE Dynamic Spectrum Access Networks")
+	score = 100 * 2 * recall * precision / (recall + precision)
+
+	acronym = normalise(acronym or "")
+	if acronym and acronym in query_words:
+		score = max(score, 100)
+
+	return score
+
+def cached_result_is_valid(result):
+	"""Re-apply the current matching rules to a cached result."""
+	query = result.get("Input Name", "")
+	found = result.get("Name", "")
+	if not query or normalise(found) == normalise(query):
+		return True
+	if result.get("Ranking Source", "").startswith("CORE"):
+		return max(
+			core_match_score(q, found, result.get("Acronym", ""))
+			for q in core_query_variants(query)
+		) >= CORE_MIN_SCORE
+	if result.get("Ranking Source") == "SCImago":
+		# Older cache entries stored the whole SCImago card (name + country + publisher)
+		prefix = " ".join(found.split()[:len(query.split()) + 1])
+		best = max(venue_similarity(query, found), venue_similarity(query, prefix))
+		return best >= SCIMAGO_MIN_SIMILARITY
+	return True
+
 def search_scimago(name, session):
 	"""Search SCImago and return journal metrics, quartile and profile URL."""
 	data = {
@@ -366,13 +433,18 @@ def search_scimago(name, session):
 		# console.print(soup.get_text(" ", strip=True)[:3000])
 
 		results = soup.find("div", class_="search_results")
-		first = results.find("a", href=True) if results else None
-		if not first:
-			data["SCImago Status"] = "No search result"
+		links = results.find_all("a", href=True) if results else []
+		def link_title(a):
+			span = a.find("span", class_="jrnlname")
+			return (span or a).get_text(" ", strip=True)
+
+		first = max(links, key=lambda a: venue_similarity(name, link_title(a)), default=None)
+		if not first or venue_similarity(name, link_title(first)) < SCIMAGO_MIN_SIMILARITY:
+			data["SCImago Status"] = "No matching journal" if links else "No search result"
 			return data
 
 		profile_url = urljoin(SCIMAGO_BASE, first["href"])
-		data["Found Title"] = first.get_text(" ", strip=True)
+		data["Found Title"] = link_title(first)
 		data["SCImago Link"] = profile_url
 
 		time.sleep(random.uniform(0.8, 1.5))
@@ -453,37 +525,8 @@ def search_core(name, session):
 		"CORE Status": "Not Found"
 	}
 
-	stop_words = {
-		"the", "of", "and", "on", "for", "in",
-		"a", "an", "proceedings", "conference"
-	}
-
 	def match_score(query, result):
-		query_norm = normalise(query)
-		title_norm = normalise(result["Name"])
-
-		if query_norm == title_norm:
-			return 100
-
-		query_words = set(query_norm.split()) - stop_words
-		title_words = set(title_norm.split()) - stop_words
-
-		if not query_words or not title_words:
-			return 0
-
-		common = query_words.intersection(title_words)
-
-		recall = len(common) / len(query_words)
-		precision = len(common) / len(title_words)
-
-		score = 100 * (0.75 * recall + 0.25 * precision)
-
-		acronym = normalise(result["Acronym"])
-
-		if acronym and acronym in query_words:
-			score = max(score, 100)
-
-		return score
+		return core_match_score(query, result["Name"], result["Acronym"])
 
 	candidates = []
 
@@ -524,7 +567,7 @@ def search_core(name, session):
 			for item in rows:
 				score = match_score(query, item)
 
-				if score >= 60:
+				if score >= CORE_MIN_SCORE:
 					candidates.append((score, item))
 
 		if not candidates:
@@ -575,26 +618,30 @@ def core_query_variants(name):
 
 	variants = [name]
 
+	def add(value):
+		value = re.sub(r"\s+", " ", value).strip(" ,.-")
+		if value and value.lower() not in {v.lower() for v in variants}:
+			variants.append(value)
+
 	cleaned = re.sub(
-		r"^\s*proceedings\s+(?:(?:of|-)\s+)?(?:the\s+)?(?:\d+(?:st|nd|rd|th)?\s+)?(?:international\s+)?",
+		r"^\s*proceedings\s+(?:(?:of|-)\s+)?(?:the\s+)?(?:\d+(?:st|nd|rd|th)?\s+)?(?:international\s+)?|(\s+Proceedings)?(\s+\d{4})?$|\bcomputer\s+society\b",
 		"",
 		name,
 		flags=re.IGNORECASE
 	)
+	add(cleaned)
 
-	cleaned = re.sub(
-		r"\bcomputer\s+society\b",
-		"",
-		cleaned,
-		flags=re.IGNORECASE
-	)
-
-	cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.-")
-
-	if cleaned and cleaned.lower() not in {
-		v.lower() for v in variants
-	}:
-		variants.append(cleaned)
+	# Scopus-style names: "2024 9th Asia Pacific Conference on X Acirs 2024 Proceedings"
+	core = re.sub(r"\s+(?:conference\s+)?proceedings$", "", name, flags=re.IGNORECASE)
+	core = re.sub(r"^\s*(?:\d{4}\s+)?(?:\d+(?:st|nd|rd|th)\s+)?(?:\d{4}\s+)?", "", core)
+	core = re.sub(r"\b\d+(?:st|nd|rd|th)\b\s*", "", core, flags=re.IGNORECASE)
+	without_year = re.sub(r"\s+\d{4}$", "", core)
+	if without_year != core:
+		# the last word before the year is normally the acronym
+		without_acronym = re.sub(r"\s+\S+$", "", without_year)
+		add(without_acronym)
+		add(without_year)
+	add(core)
 
 	return variants
 
