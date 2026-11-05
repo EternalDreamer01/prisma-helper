@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 ################################################################################
 # @file      check-wanted-papers.py
 # @brief     
@@ -197,7 +197,7 @@ def main():
 		writer.writerows(matching_rows)
 
 	# Print results
-	print(f"Missing papers: {len(missing_rows)}", file=sys.stderr)
+	print(f"Missing papers: {len(missing_rows)}")
 
 	# output_headers = [
 	# 	h for h in headers

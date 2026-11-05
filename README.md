@@ -18,8 +18,10 @@ review (Scopus CSV exports in, CSV/Markdown out).
 pip install -r requirements.txt
 ```
 
-`cross_references_finder.py` enrichment uses [pybliometrics](https://pybliometrics.readthedocs.io/),
-which needs a [Scopus API key](https://www.scopus.com/pages/home)
+`cross_references_finder.py` first resolves references containing a DOI through DOI
+content negotiation (using the BibTeX resolver in `batch_resolve.py`), then falls
+back to [pybliometrics](https://pybliometrics.readthedocs.io/), which needs a
+[Scopus API key](https://www.scopus.com/pages/home)
 (you are prompted for it on first use and it is stored in
 `~/.config/pybliometrics.cfg`). Use `--no-enrich` to work without one.
 
@@ -50,21 +52,35 @@ python cross_references_finder.py [-x] [-t 0.9] [--no-enrich]
 ```
 
 Progress is shown with rich, the results are printed as a table and saved to
-`snowball.csv`. Scopus lookups are cached in `snowball_cache.json`, so reruns only
-query new references.
+`snowball.csv`. Lookups are cached in `snowball_cache.json`, so reruns only query new references.
 
 | Option | Description |
 |--------|-------------|
 | `-x`, `--exclude-present` | Skip references that are already papers in the CSV |
 | `-t`, `--threshold` | Minimum title similarity to treat references as the same paper (default 0.9) |
-| `--no-enrich` | Skip the Scopus lookup |
+| `--no-enrich` | Skip DOI and Scopus enrichment |
 
 Output is tab-separated: `Citing papers`, `Reference`, `DOI`, `Publication venue`,
-`Abstract`. The last three are looked up in Scopus by title and left empty when no
-match is found. Enrichment makes one or two API requests per reference, so it can be
-slow and consume quota.
+`Abstract`. References with a DOI use DOI metadata first; references without usable
+DOI metadata are looked up in Scopus by title. The last three fields are left empty
+when no match is found.
 
-### 3. Check venue quality: `batch_venue_verifier.py`
+### 3. Resolve publication URLs: `batch_resolve.py`
+
+Put one URL or DOI per line in a `.txt` file (optionally followed by a title; blank lines
+and `#` comments are ignored), then run:
+
+```sh
+python batch_resolve.py urls.txt                  # BibTeX on stdout and in out.bib
+python batch_resolve.py urls.txt -o references.bib
+python batch_resolve.py https://doi.org/10.1000/xyz   # a single URL/DOI also works
+```
+
+Entries are printed to stdout (progress and errors go to stderr) and written to the
+file given by `-o`/`--output` (default `out.bib`). Citation keys are generated as
+`<first author><year><first title word>`.
+
+### 4. Check venue quality: `batch_venue_verifier.py`
 
 Put one journal or conference name per line in `venues.txt`, then run:
 

@@ -57,42 +57,46 @@ class CacheTests(unittest.TestCase):
 			p.start()
 			self.addCleanup(p.stop)
 
+	def make(self, entries=None, **kwargs):
+		cache = bvv.RankingsCache(**kwargs)
+		cache.entries = entries or {}
+		return cache
+
 	def test_update_and_get_round_trip(self):
-		cache = {}
+		cache = self.make()
 		result = {"Status": "OK", "Name": "X"}
-		bvv.update_cache("My Journal", result, cache)
-		self.assertEqual(bvv.get_cached_result("my  journal", cache), result)
-		self.assertEqual(bvv.load_cache(), cache)
+		cache.update("My Journal", result)
+		self.assertEqual(cache.get("my  journal"), result)
+		self.assertEqual(bvv.RankingsCache().load().entries, cache.entries)
 
 	def test_failed_results_are_not_cached(self):
-		cache = {}
-		bvv.update_cache("X", {"Status": "Not Found"}, cache)
-		self.assertEqual(cache, {})
+		cache = self.make()
+		cache.update("X", {"Status": "Not Found"})
+		self.assertEqual(cache.entries, {})
 		self.assertFalse(os.path.exists(bvv.CACHE_FILE))
 
 	def test_expired_entry_ignored(self):
 		old = (datetime.now(timezone.utc) - timedelta(days=bvv.CACHE_DURATION_DAYS + 1)).isoformat()
-		cache = {"x": {"timestamp": old, "result": {"Status": "OK"}}}
-		self.assertIsNone(bvv.get_cached_result("X", cache))
+		cache = self.make({"x": {"timestamp": old, "result": {"Status": "OK"}}})
+		self.assertIsNone(cache.get("X"))
 
 	def test_naive_timestamp_treated_as_utc(self):
 		recent = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
-		cache = {"x": {"timestamp": recent, "result": {"Status": "OK"}}}
-		self.assertEqual(bvv.get_cached_result("X", cache), {"Status": "OK"})
+		cache = self.make({"x": {"timestamp": recent, "result": {"Status": "OK"}}})
+		self.assertEqual(cache.get("X"), {"Status": "OK"})
 
 	def test_malformed_entry_ignored(self):
-		self.assertIsNone(bvv.get_cached_result("X", {"x": {"result": {}}}))
+		self.assertIsNone(self.make({"x": {"result": {}}}).get("X"))
 
 	def test_force_refresh_bypasses_cache(self):
-		cache = {"x": {"timestamp": datetime.now(timezone.utc).isoformat(), "result": {}}}
-		with mock.patch.object(bvv, "FORCE_REFRESH", True):
-			self.assertIsNone(bvv.get_cached_result("X", cache))
+		entries = {"x": {"timestamp": datetime.now(timezone.utc).isoformat(), "result": {}}}
+		self.assertIsNone(self.make(entries, force_refresh=True).get("X"))
 
-	def test_load_cache_handles_missing_and_corrupt_file(self):
-		self.assertEqual(bvv.load_cache(), {})
+	def test_load_handles_missing_and_corrupt_file(self):
+		self.assertEqual(bvv.RankingsCache().load().entries, {})
 		with open(bvv.CACHE_FILE, "w") as f:
 			f.write("{not json")
-		self.assertEqual(bvv.load_cache(), {})
+		self.assertEqual(bvv.RankingsCache().load().entries, {})
 
 
 class FetchUrlTests(unittest.TestCase):

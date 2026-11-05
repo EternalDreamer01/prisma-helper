@@ -143,6 +143,25 @@ class EnrichTests(unittest.TestCase):
 			self.assertEqual(crf.enrich(REF_A), ["", "", ""])
 		self.assertIn("boom", err.getvalue())
 
+	def test_doi_metadata_is_preferred_to_scopus(self):
+		ref = REF_A + ", https://doi.org/10.1234/example"
+		bibtex = """@article{key,
+  author = {Smith, J.},
+  journal = {DOI Journal},
+  abstract = {Metadata abstract}
+}"""
+		with mock.patch.object(crf.batch_resolve, "doi", return_value=bibtex), \
+				mock.patch.object(crf.Enricher, "_lookup_scopus") as scopus:
+			self.assertEqual(crf.enrich(ref), ["10.1234/example", "DOI Journal", "Metadata abstract"])
+			scopus.assert_not_called()
+
+	def test_scopus_is_used_when_doi_lookup_fails(self):
+		ref = REF_A + ", https://doi.org/10.1234/example"
+		with mock.patch.object(crf.batch_resolve, "doi", return_value=""), \
+				mock.patch.object(crf.Enricher, "_lookup_scopus", return_value=["10.1/x", "Scopus Journal", "Abstract"]) as scopus:
+			self.assertEqual(crf.enrich(ref), ["10.1/x", "Scopus Journal", "Abstract"])
+			scopus.assert_called_once_with(ref)
+
 
 if __name__ == "__main__":
 	unittest.main()

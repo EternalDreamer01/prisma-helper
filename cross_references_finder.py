@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 ################################################################################
 # @file      cross-references-find.py
 # @brief     
@@ -18,16 +18,28 @@
 import argparse, csv, json, os, re, sys
 from rapidfuzz.distance import Levenshtein
 
+import batch_resolve
 
-_scopus_ready = False
+
 THRESHOLD = 0.95
 
 CACHE_FILE = "snowball_cache.json"
 OUTPUT_FILE = "snowball.csv"
 
+
+def aprint(*args, **kwargs):
+	print("\x1b[32m[+]\x1b[0m", *args, **kwargs)
+
+def eprint(*args, **kwargs):
+	print("\x1b[31m[-]\x1b[0m", *args, file=sys.stderr, **kwargs)
+
 def normalize_doi(doi):
-    doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", str(doi or "").strip())
-    return doi or None
+    doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", str(doi or "").strip(), flags=re.I)
+    return doi.rstrip(".,;)]}") or None
+
+def doi_from_reference(ref):
+    match = re.search(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+\b", ref, re.I)
+    return normalize_doi(match.group(0)) if match else None
 
 class QuotaExceeded(Exception):
     """The Scopus API quota/limit is exhausted; stop querying."""
@@ -43,52 +55,92 @@ def save_cache(cache, path=CACHE_FILE):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(cache, f, ensure_ascii=False, indent=2)
 
-def enrich_cached(ref, threshold, cache):
-    """enrich() with a persistent cache; failed lookups (errors) are not cached."""
-    key = f"{threshold}|{ref}"
-    if key in cache:
-        return cache[key]
-    try:
-        value = _lookup(ref, threshold)
-    except Exception as e:
-        if "maximum number allowed" in str(e) or type(e).__name__ == "Scopus429Error":
-            raise QuotaExceeded(str(e)) from e
-        print(f"Error retrieving {ref[:60]}: {e}", file=sys.stderr)
-        return ["", "", ""]
-    cache[key] = value
-    return value
+EMPTY = ["", "", ""]
+
+def is_quota_error(e):
+	return "maximum number allowed" in str(e) or type(e).__name__ == "Scopus429Error"
+
+class Enricher:
+	"""Looks references up (DOI metadata first, then Scopus) with an optional persistent cache."""
+
+	def __init__(self, threshold=THRESHOLD, cache=None):
+		self.threshold = threshold
+		self.cache = cache if cache is not None else {}
+		self.scopus_ready = False
+		self.scopus_enabled = True
+
+	def enrich_cached(self, ref):
+		"""enrich() with a cache; failed lookups (errors) are not cached."""
+		key = f"{self.threshold}|{ref}"
+		if key in self.cache:
+			return self.cache[key]
+		try:
+			value = self.enrich(ref)
+		except QuotaExceeded:
+			raise
+		except Exception as e:
+			eprint(f"Error retrieving {ref[:60]}: {e}")
+			return list(EMPTY)
+		self.cache[key] = value
+		return value
+
+	def enrich(self, ref):
+		"""Return [doi, publication venue, abstract]; DOI metadata first, Scopus as fallback."""
+		doi = doi_from_reference(ref)
+		if doi:
+			try:
+				result = self._lookup_doi(doi)
+				if result[0]:
+					return result
+			except Exception as e:
+				eprint(f"Error retrieving DOI {doi}: {e}")
+		if self.scopus_enabled:
+			try:
+				return self._lookup_scopus(ref)
+			except Exception as e:
+				if is_quota_error(e):
+					raise QuotaExceeded(str(e)) from e
+				if type(e).__name__ == "Scopus403Error":
+					eprint("Scopus API access denied, check your API key")
+					eprint("Scopus API disabled for the rest of this run")
+					self.scopus_enabled = False
+				else:
+					eprint(f"Error retrieving {ref[:60]}: {e}")
+		return list(EMPTY)
+
+	def _lookup_doi(self, doi):
+		bibtex = batch_resolve.doi(doi)
+		if not bibtex or not bibtex.lstrip().startswith("@"):
+			return list(EMPTY)
+		fields = batch_resolve.bibtex_fields(bibtex)
+		venue = fields.get("journal") or fields.get("journaltitle") or fields.get("booktitle", "")
+		return [normalize_doi(doi) or "", venue, fields.get("abstract", "")]
+
+	def _lookup_scopus(self, ref):
+		from pybliometrics.scopus import AbstractRetrieval, ScopusSearch
+		if not self.scopus_ready:
+			from pybliometrics import init
+			init()
+			self.scopus_ready = True
+		key = parse(ref)
+		if key is None:
+			return list(EMPTY)
+		hits = ScopusSearch(f'TITLE("{key[1]}")', view="STANDARD", download=True).results or []
+		hits = [h for h in hits
+				if Levenshtein.normalized_similarity(clean(h.title or ""), key[1]) >= self.threshold]
+		if not hits:
+			return list(EMPTY)
+		best = max(hits, key=lambda h: Levenshtein.normalized_similarity(clean(h.title), key[1]))
+		doi = normalize_doi(best.doi)
+		abstract = ""
+		if doi:
+			article = AbstractRetrieval(doi, id_type="doi", view="META_ABS")
+			abstract = article.abstract or article.description or ""
+		return [doi or "", best.publicationName or "", abstract]
 
 def enrich(ref, threshold=THRESHOLD):
-    """Look the reference up in Scopus; return [doi, publication venue, abstract] (empty if unknown)."""
-    try:
-        return _lookup(ref, threshold)
-    except Exception as e:
-        print(f"Error retrieving {ref[:60]}: {e}", file=sys.stderr)
-        return ["", "", ""]
-
-def _lookup(ref, threshold):
-    global _scopus_ready
-    from pybliometrics.scopus import AbstractRetrieval, ScopusSearch
-    if not _scopus_ready:
-        from pybliometrics import init
-        init()
-        _scopus_ready = True
-    key = parse(ref)
-    if key is None:
-        return ["", "", ""]
-    hits = ScopusSearch(f'TITLE("{key[1]}")', view="STANDARD", download=True).results or []
-    hits = [h for h in hits
-            if Levenshtein.normalized_similarity(clean(h.title or ""), key[1]) >= threshold]
-    if not hits:
-        return ["", "", ""]
-    best = max(hits, key=lambda h: Levenshtein.normalized_similarity(clean(h.title), key[1]))
-    doi = normalize_doi(best.doi)
-    venue = best.publicationName or ""
-    abstract = ""
-    if doi:
-        article = AbstractRetrieval(doi, id_type="doi", view="META_ABS")
-        abstract = article.abstract or article.description or ""
-    return [doi or "", venue, abstract]
+	"""One-off lookup without caching."""
+	return Enricher(threshold).enrich(ref)
 
 def split_references(text):
     # References are "; "-separated, each ending with "(year)"; authors also use "; "
@@ -149,7 +201,7 @@ if __name__ == "__main__":
 	header = ["Citing papers", "Reference"]
 	if not args.no_enrich:
 		header += ["DOI", "Publication venue", "Abstract"]
-	cache = {} if args.no_enrich else load_cache()
+	enricher = Enricher(args.threshold, {} if args.no_enrich else load_cache())
 	rows = []
 	try:
 		quota_exceeded = False
@@ -158,7 +210,7 @@ if __name__ == "__main__":
 			row = [len(papers), ref]
 			if not args.no_enrich:
 				try:
-					row += enrich_cached(ref, args.threshold, cache)
+					row += enricher.enrich_cached(ref)
 				except QuotaExceeded as e:
 					if not quota_exceeded:
 						console.print(f"[red]Scopus quota exceeded ({e}). Continuing with the remaining references without enrichment...[/red]")
@@ -166,7 +218,7 @@ if __name__ == "__main__":
 			rows.append(row)
 	finally:
 		if not args.no_enrich:
-			save_cache(cache)
+			save_cache(enricher.cache)
 
 	with open(OUTPUT_FILE, "w", encoding="utf-8", newline="") as f:
 		writer = csv.writer(f, lineterminator="\n")

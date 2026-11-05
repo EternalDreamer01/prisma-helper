@@ -138,112 +138,89 @@ def print_rich_table(results):
 
 	console.print(table)
 
-def load_cache():
-	"""Load cached results from JSON."""
+class RankingsCache:
+	"""Persistent, expiring cache of venue lookup results."""
 
-	if not os.path.exists(CACHE_FILE):
-		console.print("[yellow]No existing cache found.[/yellow]")
-		return {}
+	def __init__(self, path=None, force_refresh=None, duration_days=None):
+		self.path = path or CACHE_FILE
+		self.force_refresh = FORCE_REFRESH if force_refresh is None else force_refresh
+		self.duration_days = CACHE_DURATION_DAYS if duration_days is None else duration_days
+		self.entries = {}
 
-	try:
-		with open(CACHE_FILE, "r", encoding="utf-8") as file:
-			cache = json.load(file)
+	def load(self):
+		"""Load cached results from JSON."""
+		if not os.path.exists(self.path):
+			console.print("[yellow]No existing cache found.[/yellow]")
+			self.entries = {}
+			return self
 
-		console.print(
-			f"[green]Loaded {len(cache)} cached entries.[/green]"
-		)
+		try:
+			with open(self.path, "r", encoding="utf-8") as file:
+				self.entries = json.load(file)
+			console.print(f"[green]Loaded {len(self.entries)} cached entries.[/green]")
+		except (json.JSONDecodeError, OSError) as exc:
+			console.print(f"[red]Could not load cache: {exc}[/red]")
+			self.entries = {}
+		return self
 
-		return cache
+	def save(self):
+		"""Save cache to JSON."""
+		try:
+			with open(self.path, "w", encoding="utf-8") as file:
+				json.dump(self.entries, file, indent=4, ensure_ascii=False)
+		except OSError as exc:
+			console.print(f"[red]Could not save cache: {exc}[/red]")
 
-	except (json.JSONDecodeError, OSError) as exc:
-		console.print(f"[red]Could not load cache: {exc}[/red]")
-		return {}
+	@staticmethod
+	def key(name):
+		"""Generate a normalised cache key."""
+		return normalise(name)
 
+	def get(self, name):
+		"""Return a valid cached result, or None if unavailable/expired."""
+		key = self.key(name)
 
-def save_cache(cache):
-	"""Save cache to JSON."""
-
-	try:
-		with open(CACHE_FILE, "w", encoding="utf-8") as file:
-			json.dump(
-				cache,
-				file,
-				indent=4,
-				ensure_ascii=False
-			)
-
-	except OSError as exc:
-		console.print(f"[red]Could not save cache: {exc}[/red]")
-
-
-def get_cache_key(name):
-	"""Generate a normalised cache key."""
-
-	return normalise(name)
-
-
-def get_cached_result(name, cache):
-	"""Return a valid cached result, or None if unavailable/expired."""
-
-	key = get_cache_key(name)
-
-	if FORCE_REFRESH or key not in cache:
-		return None
-
-	entry = cache[key]
-
-	try:
-		cached_at = datetime.fromisoformat(entry["timestamp"])
-
-		if cached_at.tzinfo is None:
-			cached_at = cached_at.replace(tzinfo=timezone.utc)
-
-		expiration = cached_at + timedelta(
-			days=CACHE_DURATION_DAYS
-		)
-
-		if datetime.now(timezone.utc) > expiration:
-			console.print(
-				f"[yellow]Cache expired:[/yellow] {name}"
-			)
+		if self.force_refresh or key not in self.entries:
 			return None
 
-		if not cached_result_is_valid(entry["result"]):
-			console.print(
-				f"[yellow]Cache entry rejected by current matching rules:[/yellow] {name}"
-			)
+		entry = self.entries[key]
+
+		try:
+			cached_at = datetime.fromisoformat(entry["timestamp"])
+
+			if cached_at.tzinfo is None:
+				cached_at = cached_at.replace(tzinfo=timezone.utc)
+
+			if datetime.now(timezone.utc) > cached_at + timedelta(days=self.duration_days):
+				console.print(f"[yellow]Cache expired:[/yellow] {name}")
+				return None
+
+			if not cached_result_is_valid(entry["result"]):
+				console.print(
+					f"[yellow]Cache entry rejected by current matching rules:[/yellow] {name}"
+				)
+				return None
+
+			console.print(f"[green]CACHE HIT:[/green] {name}")
+			return entry["result"]
+
+		except (KeyError, ValueError, TypeError):
 			return None
 
-		console.print(
-			f"[green]CACHE HIT:[/green] {name}"
-		)
+	def update(self, name, result):
+		"""Store a successful result in the cache."""
+		# Do not cache failed or incomplete lookups.
+		if result.get("Status") != "OK":
+			return
 
-		return entry["result"]
+		self.entries[self.key(name)] = {
+			"timestamp": datetime.now(timezone.utc).isoformat(),
+			"result": result,
+		}
+		self.save()
+		console.print(f"[cyan]Cached:[/cyan] {name}")
 
-	except (KeyError, ValueError, TypeError):
-		return None
 
-
-def update_cache(name, result, cache):
-	"""Store a successful result in the cache."""
-
-	# Do not cache failed or incomplete lookups.
-	if result.get("Status") != "OK":
-		return
-
-	key = get_cache_key(name)
-
-	cache[key] = {
-		"timestamp": datetime.now(timezone.utc).isoformat(),
-		"result": result
-	}
-
-	save_cache(cache)
-
-	console.print(
-		f"[cyan]Cached:[/cyan] {name}"
-	)
-	
 def fetch_url(session, url, headers=None, params=None):
 	"""Fetch a URL and report HTTP or connection errors."""
 
@@ -808,7 +785,7 @@ def main():
 
 	results = []
 
-	cache = load_cache()
+	cache = RankingsCache().load()
 
 	cache_hits = 0
 	cache_misses = 0
@@ -837,7 +814,7 @@ def main():
 					description=f"[cyan]{venue[:55]}"
 				)
 				# Check cache first.
-				cached_result = get_cached_result(venue, cache)
+				cached_result = cache.get(venue)
 
 				if cached_result is not None:
 					result = cached_result
@@ -846,7 +823,7 @@ def main():
 					# Cache miss: perform actual scraping.
 					result = process_venue(venue, session)
 					# Save successful results.
-					update_cache(venue, result, cache)
+					cache.update(venue, result)
 					cache_misses += 1
 					time.sleep(random.uniform(1.5, 3.0))
 				results.append(result)
