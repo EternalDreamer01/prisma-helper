@@ -64,7 +64,7 @@ def doi(doi_str: str) -> str:
     headers = {"Accept": "application/x-bibtex", "User-Agent": "bibfetch/1.0"}
     r = requests.get(url, headers=headers, allow_redirects=True, timeout=30)
     r.encoding = "utf-8"
-    return r.text if r.ok else ""
+    return r.text.strip() if r.ok else ""
 
 def arxiv(url: str) -> str:
     # original used arxiv-doi-link from arXiv HTML; emulate by fetching page and extracting citation when possible
@@ -291,7 +291,7 @@ def bibtex_fields(bibtex: str) -> dict[str, str]:
 	return fields
 
 def is_doi_url(url: str) -> bool:
-	return re.match(r"\d{2}\.\d{4,9}/[-._;A-Z0-9]+", url, re.IGNORECASE) is not None
+	return re.match(r"^\d{2}\.\d{4,9}/[-._;A-Z0-9]+$", url, re.IGNORECASE) is not None
 
 def resolve_url(url: str) -> str:
 	"""Resolve a supported publication URL to a BibTeX entry."""
@@ -369,6 +369,8 @@ def resolve_list(entries: list[tuple[str, str]], output_path: str) -> int:
 				progress.console.print(f"[red][-] {url} bibtex failed![/red]", highlight=False)
 				continue
 			bib = bib if bib.endswith("\n") else bib + "\n"
+			if is_doi_url(url):
+				url = f"https://doi.org/{url}"
 			progress.console.print(f"[green][+][/green] {url}", highlight=False)
 			# sys.stdout.write(bib + "\n")
 			# sys.stdout.flush()
